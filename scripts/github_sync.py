@@ -369,6 +369,219 @@ def test_connection(token: str = None) -> Dict:
         return {"success": False, "error": str(e)}
 
 
+# ============ 团队日报搜索功能（新增） ============
+def parse_front_matter(content: str) -> Dict:
+    """
+    解析日报的 YAML Front Matter
+    
+    Args:
+        content: 日报完整内容
+    
+    Returns:
+        解析后的字典，如果解析失败返回空字典
+    """
+    try:
+        if not content.startswith("---"):
+            return {}
+        
+        # 提取 front matter 部分
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return {}
+        
+        front_matter = parts[1].strip()
+        
+        # 简单解析（不依赖 yaml 库）
+        data = {}
+        current_key = None
+        current_list = None
+        
+        for line in front_matter.split('\n'):
+            line = line.rstrip()
+            if not line or line.startswith('#'):
+                continue
+            
+            # 顶级键值对
+            if ':' in line and not line.startswith(' '):
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if value:
+                    data[key] = value.strip('"\'')
+                else:
+                    current_key = key
+                    current_list = []
+                    data[key] = current_list
+            
+            # 列表项
+            elif line.startswith('  - ') and current_list is not None:
+                item = line[4:].strip()
+                current_list.append(item)
+        
+        return data
+    except:
+        return {}
+
+
+def search_team_logs(
+    keyword: str = None,
+    project: str = None,
+    member: str = None,
+    team: str = DEFAULT_TEAM,
+    date_from: str = None,
+    date_to: str = None,
+    limit: int = 10
+) -> List[Dict]:
+    """
+    搜索团队日报
+    
+    Args:
+        keyword: 搜索关键词（在正文和 Front Matter 中搜索）
+        project: 项目名称
+        member: 成员 ID
+        team: 团队名称
+        date_from: 起始日期 (YYYY-MM-DD)
+        date_to: 结束日期 (YYYY-MM-DD)
+        limit: 返回结果数量限制
+    
+    Returns:
+        匹配的日志列表，每项包含：
+        {
+            "member_id": "...",
+            "member_name": "...",
+            "date": "...",
+            "match_type": "keyword/project/...",
+            "excerpt": "...",  # 匹配片段
+            "url": "...",
+            "front_matter": {...}
+        }
+    
+    Examples:
+        search_team_logs(keyword="Prompt 优化")
+        search_team_logs(project="ai-tutor")
+        search_team_logs(member="Bryce")
+    """
+    results = []
+    
+    team_dir = TEAM_DIRS.get(team, TEAM_DIRS["china"])
+    members_path = f"成员日志 members/{team_dir}"
+    encoded_path = encode_path(members_path)
+    url = f"{API_BASE}/repos/{REPO}/contents/{encoded_path}"
+    
+    try:
+        headers = get_headers()
+        
+        # 获取团队成员列表
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return results
+        
+        members = [item["name"] for item in r.json() if item["type"] == "dir"]
+        
+        # 如果指定了成员，只搜索该成员
+        if member:
+            members = [m for m in members if member.lower() in m.lower()]
+        
+        # 遍历每个成员的日志
+        for member_id in members:
+            member_path = f"{members_path}/{member_id}"
+            encoded_member_path = encode_path(member_path)
+            member_url = f"{API_BASE}/repos/{REPO}/contents/{encoded_member_path}"
+            
+            r = requests.get(member_url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                continue
+            
+            files = r.json()
+            
+            # 按日期排序（最新的在前）
+            log_files = [f for f in files if f["name"].endswith("_log.md")]
+            log_files.sort(key=lambda x: x["name"], reverse=True)
+            
+            # 遍历日志文件
+            for log_file in log_files[:20]:  # 每个成员最多检查最近20个日志
+                file_date = log_file["name"].replace("_log.md", "")
+                
+                # 日期过滤
+                if date_from and file_date < date_from:
+                    continue
+                if date_to and file_date > date_to:
+                    continue
+                
+                # 获取文件内容
+                try:
+                    content_r = requests.get(log_file["download_url"], timeout=10)
+                    if content_r.status_code != 200:
+                        continue
+                    
+                    content = content_r.text
+                    
+                    # 解析 Front Matter
+                    front_matter = parse_front_matter(content)
+                    
+                    # 检查是否匹配
+                    match = False
+                    match_type = ""
+                    excerpt = ""
+                    
+                    # 项目匹配
+                    if project:
+                        if any(project.lower() in str(v).lower() for v in front_matter.values()):
+                            match = True
+                            match_type = "project"
+                            excerpt = f"项目: {project}"
+                    
+                    # 关键词匹配
+                    if keyword:
+                        keyword_lower = keyword.lower()
+                        if keyword_lower in content.lower():
+                            match = True
+                            match_type = "keyword"
+                            
+                            # 提取匹配片段
+                            content_lines = content.split('\n')
+                            for i, line in enumerate(content_lines):
+                                if keyword_lower in line.lower():
+                                    # 提取前后各2行作为上下文
+                                    start = max(0, i-2)
+                                    end = min(len(content_lines), i+3)
+                                    excerpt = '\n'.join(content_lines[start:end])
+                                    break
+                    
+                    # 如果没有指定任何过滤条件，返回所有
+                    if not keyword and not project:
+                        match = True
+                        match_type = "all"
+                        # 提取 AI 学习部分作为摘要
+                        ai_learning = front_matter.get("ai_learning", "")
+                        if ai_learning:
+                            excerpt = f"AI 学习: {ai_learning}"
+                    
+                    if match:
+                        results.append({
+                            "member_id": member_id,
+                            "member_name": front_matter.get("member_name", member_id),
+                            "date": file_date,
+                            "match_type": match_type,
+                            "excerpt": excerpt[:300],  # 限制长度
+                            "url": log_file["html_url"],
+                            "front_matter": front_matter
+                        })
+                        
+                        if len(results) >= limit:
+                            return results
+                
+                except Exception as e:
+                    continue
+        
+        return results
+    
+    except Exception as e:
+        print(f"搜索出错: {e}")
+        return results
+
+
 if __name__ == "__main__":
     import sys
     

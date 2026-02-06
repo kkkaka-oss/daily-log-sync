@@ -30,6 +30,14 @@ team: china
   2. 结合用户的工作背景生成回复
   3. 推送到 GitHub Issue
 
+### 团队知识检索（新增）✨
+- "有人做过 xxx 吗"
+- "查一下 xxx 项目"
+- "看看 xxx 的日报"
+- "xxx 最近在做什么"
+- "团队在 xxx 上有什么经验"
+- "搜索关于 xxx 的内容"
+
 ---
 
 ## 工作流程
@@ -308,3 +316,64 @@ reply_to_issue(
 **用户**：可以
 
 **Claude**：[调用 reply_to_issue() 发送，返回成功链接]
+
+---
+
+## 团队知识检索
+
+### 检查团队日报
+
+```python
+from scripts.github_sync import search_team_logs
+
+# 搜索关键词
+results = search_team_logs(keyword="Prompt 优化")
+
+# 搜索项目
+results = search_team_logs(project="ai-tutor")
+
+# 搜索特定成员
+results = search_team_logs(member="Bryce")
+
+# 组合搜索
+results = search_team_logs(
+    keyword="API 超时", 
+    date_from="2026-01-01",
+    limit=5
+)
+```
+
+### 对话示例
+
+**用户**：有人做过 Prompt 优化吗？
+
+**Claude**：[调用 search_team_logs() 搜索]
+
+找到 2 条相关记录：
+
+📋 **kkkaka-oss** (2026-02-02)
+- 项目：AI 助教内容生成器
+- 内容：精简 SYSTEM_PROMPT 从 440 行到 50 行，处理速度提升 30-50%
+- [查看日报](链接)
+
+📋 **佳冉** (2026-01-28)
+- 项目：AI 助教策略
+- 内容：优化提示词，策略生成准确度提升
+- [查看日报](链接)
+
+---
+
+**用户**：Bryce 最近在做什么？
+
+**Claude**：[调用 search_team_logs(member="Bryce") 搜索]
+
+📋 **Bryce** 最近 3 条日报：
+
+1. **2026-01-27** - 贾维斯单词课 2.0 迭代
+   - P2/P3 阶段优化
+   - 修复错题循环问题
+   - [查看日报](链接)
+
+2. **2026-01-26** - ...
+
+3. **2026-01-23** - ...
